@@ -1,14 +1,17 @@
 """Builds a plain-language explanation of a prediction.
 
 Two tiers:
-  * If ANTHROPIC_API_KEY is set, asks Claude to write a clinician-readable note
-    grounded in the prediction + heatmap coverage statistics.
+  * If GROQ_API_KEY is set, asks a Groq-hosted LLM to write a clinician-readable
+    note grounded in the prediction + heatmap coverage statistics.
   * Otherwise, a deterministic template produces a solid offline explanation so
-    the app never hard-depends on a paid API (stays free-tier runnable).
+    the app never hard-depends on an API key (stays free-tier runnable).
 """
 import os
 
 import numpy as np
+
+# Model is env-configurable: Groq rotates its catalog, so don't hard-code.
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 
 
 def _heatmap_stats(heatmap: np.ndarray) -> dict:
@@ -30,9 +33,7 @@ def _heatmap_stats(heatmap: np.ndarray) -> dict:
     return {"coverage": coverage, "region": region}
 
 
-def _template_explanation(
-    label: str, confidence: float, stats: dict
-) -> str:
+def _template_explanation(label: str, confidence: float, stats: dict) -> str:
     pct = f"{confidence * 100:.1f}%"
     cov = f"{stats['coverage'] * 100:.0f}%"
     return (
@@ -46,11 +47,12 @@ def _template_explanation(
     )
 
 
-def _claude_explanation(label: str, confidence: float, stats: dict) -> str:
+def _groq_explanation(label: str, confidence: float, stats: dict) -> str:
     # Imported lazily so the package isn't required in offline deployments.
-    from anthropic import Anthropic
+    from groq import Groq
 
-    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    client = Groq(api_key=os.environ["GROQ_API_KEY"])
+    model = os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
     prompt = (
         f"A CNN classified a cell microscopy image as '{label}' with "
         f"{confidence * 100:.1f}% confidence. A Grad-CAM saliency map shows the "
@@ -61,21 +63,21 @@ def _claude_explanation(label: str, confidence: float, stats: dict) -> str:
         f"reminder that this is a decision-support output, not a diagnosis. Do "
         f"not invent clinical findings beyond what the data supports."
     )
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
+    completion = client.chat.completions.create(
+        model=model,
         max_tokens=300,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text.strip()
+    return completion.choices[0].message.content.strip()
 
 
 def build_explanation(
     label: str, confidence: float, heatmap: np.ndarray
 ) -> str:
     stats = _heatmap_stats(heatmap)
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if os.environ.get("GROQ_API_KEY"):
         try:
-            return _claude_explanation(label, confidence, stats)
+            return _groq_explanation(label, confidence, stats)
         except Exception:
             # Never fail the request because the LLM call did — fall back.
             return _template_explanation(label, confidence, stats)
