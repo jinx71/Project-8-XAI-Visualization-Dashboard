@@ -1,9 +1,0 @@
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-.env
-models/*.h5
-models/*.keras
-models/saved_model/
-.pytest_cache/
